@@ -1,154 +1,170 @@
-#!/usr/bin/python
-# coding: utf8
+"""
+:class:`Yandex` geocoder.
+"""
 
-from __future__ import absolute_import
-from geocoder.base import Base
+from geopy.compat import urlencode
+
+from geopy.geocoders.base import Geocoder, DEFAULT_TIMEOUT
+from geopy.location import Location
+from geopy.exc import (
+    GeocoderServiceError,
+    GeocoderParseError
+)
+from geopy.util import logger
 
 
-class Yandex(Base):
+__all__ = ("Yandex", )
+
+
+class Yandex(Geocoder): # pylint: disable=W0223
     """
-    Yandex
-    ======
-    Yandex (Russian: Яндекс) is a Russian Internet company
-    which operates the largest search engine in Russia with
-    about 60% market share in that country.
-
-    The Yandex home page has been rated as the most popular website in Russia.
-
-    Params
-    ------
-    :param location: Your search location you want geocoded.
-    :param lang: Chose the following language:
-        > ru-RU — Russian (by default)
-        > uk-UA — Ukrainian
-        > be-BY — Belarusian
-        > en-US — American English
-        > en-BR — British English
-        > tr-TR — Turkish (only for maps of Turkey)
-    :param kind: Type of toponym (only for reverse geocoding):
-        > house - house or building
-        > street - street
-        > metro - subway station
-        > district - city district
-        > locality - locality (city, town, village, etc.)
-
-    References
-    ----------
-    API Reference: http://api.yandex.com/maps/doc/geocoder/
-                   desc/concepts/input_params.xml
+    Yandex geocoder, documentation at:
+        http://api.yandex.com/maps/doc/geocoder/desc/concepts/input_params.xml
     """
-    provider = 'yandex'
-    method = 'geocode'
 
-    def __init__(self, location, **kwargs):
-        self.url = 'http://geocode-maps.yandex.ru/1.x/'
-        self.location = location
-        self.params = {
-            'geocode': location,
-            'lang': kwargs.get('lang', 'en-US'),
-            'kind': kwargs.get('kind', ''),
-            'format': 'json',
-            'results': 1,
+    def __init__(
+            self,
+            api_key=None,
+            lang=None,
+            timeout=DEFAULT_TIMEOUT,
+            proxies=None,
+            user_agent=None,
+        ):
+        """
+        Create a Yandex-based geocoder.
+
+            .. versionadded:: 1.5.0
+
+        :param string api_key: Yandex API key (not obligatory)
+            http://api.yandex.ru/maps/form.xml
+
+        :param string lang: response locale, the following locales are
+            supported: "ru_RU" (default), "uk_UA", "be_BY", "en_US", "tr_TR"
+
+        :param int timeout: Time, in seconds, to wait for the geocoding service
+            to respond before raising a :class:`geopy.exc.GeocoderTimedOut`
+            exception.
+
+        :param dict proxies: If specified, routes this geocoder's requests
+            through the specified proxy. E.g., {"https": "192.0.2.0"}. For
+            more information, see documentation on
+            :class:`urllib2.ProxyHandler`.
+        """
+        super(Yandex, self).__init__(
+            scheme='http', timeout=timeout, proxies=proxies, user_agent=user_agent
+        )
+        self.api_key = api_key
+        self.lang = lang
+        self.api = 'http://geocode-maps.yandex.ru/1.x/'
+
+    def geocode(self, query, exactly_one=True, timeout=None): # pylint: disable=W0221
+        """
+        Geocode a location query.
+
+        :param string query: The address or query you wish to geocode.
+
+        :param bool exactly_one: Return one result or a list of results, if
+            available.
+
+        :param int timeout: Time, in seconds, to wait for the geocoding service
+            to respond before raising a :class:`geopy.exc.GeocoderTimedOut`
+            exception. Set this only if you wish to override, on this call
+            only, the value set during the geocoder's initialization.
+        """
+        params = {
+            'geocode': query,
+            'format': 'json'
         }
-        self._initialize(**kwargs)
+        if not self.api_key is None:
+            params['key'] = self.api_key
+        if not self.lang is None:
+            params['lang'] = self.lang
+        if exactly_one is True:
+            params['results'] = 1
+        url = "?".join((self.api, urlencode(params)))
+        logger.debug("%s.geocode: %s", self.__class__.__name__, url)
+        return self._parse_json(
+            self._call_geocoder(url, timeout=timeout),
+            exactly_one,
+        )
 
-    def _exceptions(self):
-        # Build intial Tree with results
-        feature = self.parse['GeoObjectCollection']['featureMember']
-        for item in feature:
-            self._build_tree(item['GeoObject'])
+    def reverse(
+            self,
+            query,
+            exactly_one=False,
+            timeout=None,
+        ):
+        """
+        Given a point, find an address.
 
-    @property
-    def address(self):
-        return self.parse['GeocoderMetaData'].get('text')
+        :param string query: The coordinates for which you wish to obtain the
+            closest human-readable addresses.
+        :type query: :class:`geopy.point.Point`, list or tuple of (latitude,
+            longitude), or string as "%(latitude)s, %(longitude)s"
 
-    @property
-    def lat(self):
-        pos = self.parse['Point'].get('pos')
-        if pos:
-            return pos.split(' ')[1]
+        :param boolean exactly_one: Return one result or a list of results, if
+            available.
 
-    @property
-    def lng(self):
-        pos = self.parse['Point'].get('pos')
-        if pos:
-            return pos.split(' ')[0]
+        :param int timeout: Time, in seconds, to wait for the geocoding service
+            to respond before raising a :class:`geopy.exc.GeocoderTimedOut`
+            exception.
 
-    @property
-    def bbox(self):
-        if self.parse['Envelope']:
-            east, north = self.parse['Envelope'].get('upperCorner').split(' ')
-            west, south = self.parse['Envelope'].get('lowerCorner').split(' ')
+        """
+        try:
+            lat, lng = [
+                x.strip() for x in
+                self._coerce_point_to_string(query).split(',')
+            ]
+        except ValueError:
+            raise ValueError("Must be a coordinate pair or Point")
+        params = {
+            'geocode': '{0},{1}'.format(lng, lat),
+            'format': 'json'
+        }
+        if self.api_key is not None:
+            params['key'] = self.api_key
+        if self.lang is not None:
+            params['lang'] = self.lang
+        url = "?".join((self.api, urlencode(params)))
+        logger.debug("%s.reverse: %s", self.__class__.__name__, url)
+        return self._parse_json(
+            self._call_geocoder(url, timeout=timeout),
+            exactly_one
+        )
+
+    def _parse_json(self, doc, exactly_one):
+        """
+        Parse JSON response body.
+        """
+        if doc.get('error'):
+            raise GeocoderServiceError(doc['error']['message'])
+
+        try:
+            places = doc['response']['GeoObjectCollection']['featureMember']
+        except KeyError:
+            raise GeocoderParseError('Failed to parse server response')
+
+        def parse_code(place):
+            """
+            Parse each record.
+            """
             try:
-                return self._get_bbox(float(south),
-                                      float(west),
-                                      float(north),
-                                      float(east))
-            except:
-                pass
+                place = place['GeoObject']
+            except KeyError:
+                raise GeocoderParseError('Failed to parse server response')
 
-    @property
-    def quality(self):
-        return self.parse['GeocoderMetaData'].get('kind')
+            longitude, latitude = [
+                float(_) for _ in place['Point']['pos'].split(' ')
+            ]
 
-    @property
-    def accuracy(self):
-        return self.parse['GeocoderMetaData'].get('precision')
+            location = place.get('description')
 
-    @property
-    def housenumber(self):
-        return self.parse['Premise'].get('PremiseNumber')
+            return Location(location, (latitude, longitude), place)
 
-    @property
-    def street(self):
-        return self.parse['Thoroughfare'].get('ThoroughfareName')
-
-    @property
-    def city(self):
-        return self.parse['Locality'].get('LocalityName')
-
-    @property
-    def county(self):
-        return self.parse['SubAdministrativeArea'].get('SubAdministrative'
-                                                       'AreaName')
-
-    @property
-    def state(self):
-        return self.parse['AdministrativeArea'].get('AdministrativeAreaName')
-
-    @property
-    def country(self):
-        return self.parse['Country'].get('CountryName')
-
-    @property
-    def country_code(self):
-        return self.parse['Country'].get('CountryNameCode')
-
-    @property
-    def SubAdministrativeArea(self):
-        return self.parse['SubAdministrativeArea'].get('SubAdministrativeAreaName')
-
-    @property
-    def Premise(self):
-        return self.parse.get('Premise')
-
-    @property
-    def AdministrativeArea(self):
-        return self.parse['AdministrativeArea'].get('AdministrativeAreaName')
-
-    @property
-    def Locality(self):
-        return self.parse['Locality']
-
-    @property
-    def Thoroughfare(self):
-        return self.parse['Thoroughfare'].get('ThoroughfareName')
-
-    @property
-    def description(self):
-        return self.parse['description']
-
-
-if __name__ == '__main__':
-    g = Yandex('1552 Payette dr., Ottawa')
-    g.debug()
+        if exactly_one:
+            try:
+                return parse_code(places[0])
+            except IndexError:
+                return None
+        else:
+            return [parse_code(place) for place in places]

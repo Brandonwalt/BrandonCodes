@@ -1,173 +1,172 @@
-#!/usr/bin/python
-# coding: utf8
+"""
+:class:`.GeocodeFarm` geocoder.
+"""
 
-from __future__ import absolute_import
-import six
-from geocoder.base import Base
-from geocoder.keys import geocodefarm_key
+from geopy.geocoders.base import Geocoder, DEFAULT_FORMAT_STRING, \
+    DEFAULT_TIMEOUT
+from geopy.location import Location
+from geopy.util import logger
+from geopy.exc import GeocoderAuthenticationFailure, GeocoderQuotaExceeded, \
+    GeocoderServiceError
+from geopy.compat import urlencode
 
 
-class GeocodeFarm(Base):
+__all__ = ("GeocodeFarm", )
+
+
+class GeocodeFarm(Geocoder):
     """
-    Geocode.Farm
-    ============
-    Geocode.Farm is one of the few providers that provide this highly
-    specialized service for free. We also have affordable paid plans, of
-    course, but our free services are of the same quality and provide the same
-    results. The major difference between our affordable paid plans and our
-    free API service is the limitations. On one of our affordable paid plans
-    your limit is set based on the plan you signed up for, starting at 25,000
-    query requests per day (API calls). On our free API offering, you are
-    limited to 250 query requests per day (API calls).
-
-    Params
-    ------
-    :param location: The string to search for. Usually a street address.
-    :param key: (optional) API Key. Only Required for Paid Users.
-    :param lang: (optional) 2 digit lanuage code to return results in. Currently only "en"(English) or "de"(German) supported.
-    :param country: (optional) The country to return results in. Used for biasing purposes and may not fully filter results to this specific country.
-
-    API Reference
-    -------------
-    https://geocode.farm/geocoding/free-api-documentation/
+    Geocoder using the GeocodeFarm API. Documentation at:
+        https://www.geocode.farm/geocoding/free-api-documentation/
     """
-    provider = 'geocodefarm'
-    method = 'geocode'
 
-    def __init__(self, location, **kwargs):
-        self.url = 'https://www.geocode.farm/v3/json/forward/'
-        key = kwargs.get('key', geocodefarm_key)
+    def __init__(
+            self,
+            api_key=None,
+            format_string=DEFAULT_FORMAT_STRING,
+            timeout=DEFAULT_TIMEOUT,
+            proxies=None,
+            user_agent=None,
+        ):  # pylint: disable=R0913
+        """
+        Create a geocoder for GeocodeFarm.
 
-        self.params = {
-            'addr': location,
-            'key': key if key else None,
-            'lang': kwargs.get('lang', ''),
-            'country': kwargs.get('country', ''),
+            .. versionadded:: 0.99
+
+        :param string api_key: The API key required by GeocodeFarm to perform
+            geocoding requests.
+
+        :param string format_string: String containing '%s' where the
+            string to geocode should be interpolated before querying the
+            geocoder. For example: '%s, Mountain View, CA'. The default
+            is just '%s'.
+
+        :param dict proxies: If specified, routes this geocoder's requests
+            through the specified proxy. E.g., {"https": "192.0.2.0"}. For
+            more information, see documentation on
+            :class:`urllib2.ProxyHandler`.
+        """
+        super(GeocodeFarm, self).__init__(
+            format_string, 'https', timeout, proxies, user_agent=user_agent
+        )
+        self.api_key = api_key
+        self.format_string = format_string
+        self.api = (
+            "%s://www.geocode.farm/v3/json/forward/" % self.scheme
+        )
+        self.reverse_api = (
+            "%s://www.geocode.farm/v3/json/reverse/" % self.scheme
+        )
+
+    def geocode(self, query, exactly_one=True, timeout=None):
+        """
+        Geocode a location query.
+
+        :param string query: The address or query you wish to geocode.
+
+        :param bool exactly_one: Return one result or a list of results, if
+            available.
+
+        :param int timeout: Time, in seconds, to wait for the geocoding service
+            to respond before raising a :class:`geopy.exc.GeocoderTimedOut`
+            exception. Set this only if you wish to override, on this call
+            only, the value set during the geocoder's initialization.
+        """
+        params = {
+            'addr': self.format_string % query,
         }
-        self._initialize(**kwargs)
+        if self.api_key:
+            params['key'] = self.api_key
+        url = "?".join((self.api, urlencode(params)))
+        logger.debug("%s.geocode: %s", self.__class__.__name__, url)
+        return self._parse_json(
+            self._call_geocoder(url, timeout=timeout), exactly_one
+        )
 
-    def _catch_errors(self):
-        status = self.parse['STATUS'].get('status')
-        if not status == 'SUCCESS':
-            self.error = status
+    def reverse(self, query, exactly_one=True, timeout=None):
+        """
+        Returns a reverse geocoded location.
 
-    def _exceptions(self):
-        geocoding_results = self.parse['geocoding_results']
-        if geocoding_results:
-            self._build_tree(geocoding_results['RESULTS'][0])
-            self._build_tree(geocoding_results['STATUS'])
-            self._build_tree(geocoding_results['ACCOUNT'])
+        :param query: The coordinates for which you wish to obtain the
+            closest human-readable addresses.
+        :type query: :class:`geopy.point.Point`, list or tuple of (latitude,
+            longitude), or string as "%(latitude)s, %(longitude)s"
 
-    @property
-    def lat(self):
-        lat = self.parse['COORDINATES'].get('latitude')
-        if lat:
-            return float(lat)
+        :param bool exactly_one: Return one result or a list of results, if
+            available. GeocodeFarm's API will always return at most one
+            result.
 
-    @property
-    def lng(self):
-        lng = self.parse['COORDINATES'].get('longitude')
-        if lng:
-            return float(lng)
+        :param int timeout: Time, in seconds, to wait for the geocoding service
+            to respond before raising a :class:`geopy.exc.GeocoderTimedOut`
+            exception. Set this only if you wish to override, on this call
+            only, the value set during the geocoder's initialization.
+        """
+        try:
+            lat, lon = [
+                x.strip() for x in
+                self._coerce_point_to_string(query).split(',')
+            ]
+        except ValueError:
+            raise ValueError("Must be a coordinate pair or Point")
+        params = {
+            'lat': lat,
+            'lon': lon
+        }
+        if self.api_key:
+            params['key'] = self.api_key
+        url = "?".join((self.reverse_api, urlencode(params)))
+        logger.debug("%s.reverse: %s", self.__class__.__name__, url)
+        return self._parse_json(
+            self._call_geocoder(url, timeout=timeout), exactly_one
+        )
 
-    @property
-    def accuracy(self):
-        return self.parse.get('accuracy')
+    @staticmethod
+    def parse_code(results):
+        """
+        Parse each resource.
+        """
+        places = []
+        for result in results.get('RESULTS'):
+            coordinates = result.get('COORDINATES', {})
+            address = result.get('ADDRESS', {})
+            latitude = coordinates.get('latitude', None)
+            longitude = coordinates.get('longitude', None)
+            placename = address.get('address_returned', None)
+            if placename is None:
+                placename = address.get('address', None)
+            if latitude and longitude:
+                latitude = float(latitude)
+                longitude = float(longitude)
+            places.append(Location(placename, (latitude, longitude), result))
+        return places
 
-    @property
-    def bbox(self):
-        south = self.parse['BOUNDARIES'].get('southwest_latitude')
-        west = self.parse['BOUNDARIES'].get('southwest_longitude')
-        north = self.parse['BOUNDARIES'].get('northeast_latitude')
-        east = self.parse['BOUNDARIES'].get('northeast_longitude')
-        return self._get_bbox(south, west, north, east)
+    def _parse_json(self, api_result, exactly_one):
+        if api_result is None:
+            return None
+        geocoding_results = api_result["geocoding_results"]
+        self._check_for_api_errors(geocoding_results)
 
-    @property
-    def address(self):
-        return self.parse.get('formatted_address')
+        places = self.parse_code(geocoding_results)
+        if exactly_one is True:
+            return places[0]
+        else:
+            return places
 
-    @property
-    def housenumber(self):
-        return self.parse['ADDRESS'].get('street_number')
-
-    @property
-    def street(self):
-        return self.parse['ADDRESS'].get('street_name')
-
-    @property
-    def neighborhood(self):
-        return self.parse['ADDRESS'].get('neighborhood')
-
-    @property
-    def city(self):
-        return self.parse['ADDRESS'].get('locality')
-
-    @property
-    def county(self):
-        return self.parse['ADDRESS'].get('admin_2')
-
-    @property
-    def state(self):
-        return self.parse['ADDRESS'].get('admin_1')
-
-    @property
-    def country(self):
-        return self.parse['ADDRESS'].get('country')
-
-    @property
-    def postal(self):
-        return self.parse['ADDRESS'].get('postal_code')
-
-    @property
-    def elevation(self):
-        return self.parse['LOCATION_DETAILS'].get('elevation')
-
-    @property
-    def timezone_long(self):
-        return self.parse['LOCATION_DETAILS'].get('timezone_long')
-
-    @property
-    def timezone_short(self):
-        return self.parse['LOCATION_DETAILS'].get('timezone_short')
-
-    @property
-    def access(self):
-        return self.parse['STATUS'].get('access')
-
-    @property
-    def address_provided(self):
-        return self.parse['STATUS'].get('address_provided')
-
-    @property
-    def ip_address(self):
-        return self.parse['ACCOUNT'].get('ip_address')
-
-    @property
-    def distribution_license(self):
-        return self.parse['ACCOUNT'].get('distribution_license')
-
-    @property
-    def usage_limit(self):
-        usage_limit = self.parse['ACCOUNT'].get('usage_limit')
-        if usage_limit:
-            return int(usage_limit)
-
-    @property
-    def used_today(self):
-        used_today = self.parse['ACCOUNT'].get('used_today')
-        if used_today:
-            return int(used_today)
-
-    @property
-    def used_total(self):
-        used_total = self.parse['ACCOUNT'].get('used_total')
-        if used_total:
-            return int(used_total)
-
-    @property
-    def first_used(self):
-        return self.parse['ACCOUNT'].get('first_used')
-
-if __name__ == '__main__':
-    g = GeocodeFarm("New York City")
-    g.debug()
+    @staticmethod
+    def _check_for_api_errors(geocoding_results):
+        """
+        Raise any exceptions if there were problems reported
+        in the api response.
+        """
+        status_result = geocoding_results.get("STATUS", {})
+        api_call_success = status_result.get("status", "") == "SUCCESS"
+        if not api_call_success:
+            access_error = status_result.get("access")
+            access_error_to_exception = {
+                'API_KEY_INVALID': GeocoderAuthenticationFailure,
+                'OVER_QUERY_LIMIT': GeocoderQuotaExceeded,
+            }
+            exception_cls = access_error_to_exception.get(
+                access_error, GeocoderServiceError
+            )
+            raise exception_cls(access_error)

@@ -1,166 +1,206 @@
-#!/usr/bin/python
-# coding: utf8
+"""
+:class:`.OpenCage` is the Opencagedata geocoder.
+"""
 
-from __future__ import absolute_import
-from geocoder.base import Base
-from geocoder.keys import opencage_key
+from geopy.compat import urlencode
+from geopy.geocoders.base import Geocoder, DEFAULT_TIMEOUT, DEFAULT_SCHEME
+from geopy.exc import (
+    GeocoderQueryError,
+    GeocoderQuotaExceeded,
+)
+from geopy.location import Location
+from geopy.util import logger
 
 
-class OpenCage(Base):
+__all__ = ("OpenCage", )
+
+
+class OpenCage(Geocoder):
     """
-    OpenCage Geocoding Services
-    ===========================
-    OpenCage Geocoder simple, easy, and open geocoding for the entire world
-    Our API combines multiple geocoding systems in the background.
-    Each is optimized for different parts of the world and types of requests.
-    We aggregate the best results from open data sources and algorithms so you don't have to.
-    Each is optimized for different parts of the world and types of requests.
+    Geocoder using the Open Cage Data API. Documentation at:
+        http://geocoder.opencagedata.com/api.html
 
-    API Reference
-    -------------
-    http://geocoder.opencagedata.com/api.html
+    ..versionadded:: 1.1.0
     """
-    provider = 'opencage'
-    method = 'geocode'
 
-    def __init__(self, location, **kwargs):
-        self.url = 'http://api.opencagedata.com/geocode/v1/json'
-        self.location = location
-        self.params = {
-            'query': location,
-            'key': self._get_api_key(opencage_key, **kwargs),
+    def __init__(
+            self,
+            api_key,
+            domain='api.opencagedata.com',
+            scheme=DEFAULT_SCHEME,
+            timeout=DEFAULT_TIMEOUT,
+            proxies=None,
+            user_agent=None,
+    ):  # pylint: disable=R0913
+        """
+        Initialize a customized Open Cage Data geocoder.
+
+        :param string api_key: The API key required by Open Cage Data
+            to perform geocoding requests. You can get your key here:
+            https://developer.opencagedata.com/
+
+        :param string domain: Currently it is 'api.opencagedata.com', can
+            be changed for testing purposes.
+
+        :param string scheme: Use 'https' or 'http' as the API URL's scheme.
+            Default is https. Note that SSL connections' certificates are not
+            verified.
+
+        :param dict proxies: If specified, routes this geocoder's requests
+            through the specified proxy. E.g., {"https": "192.0.2.0"}. For
+            more information, see documentation on
+            :class:`urllib2.ProxyHandler`.
+
+        """
+        super(OpenCage, self).__init__(
+            scheme=scheme, timeout=timeout, proxies=proxies, user_agent=user_agent
+        )
+
+        self.api_key = api_key
+        self.domain = domain.strip('/')
+        self.scheme = scheme
+        self.api = '%s://%s/geocode/v1/json' % (self.scheme, self.domain)
+
+    def geocode(
+            self,
+            query,
+            bounds=None,
+            country=None,
+            language=None,
+            exactly_one=True,
+            timeout=None,
+    ):  # pylint: disable=W0221,R0913
+        """
+        Geocode a location query.
+
+        :param string query: The query string to be geocoded; this must
+            be URL encoded.
+
+        :param string language: an IETF format language code (such as `es`
+            for Spanish or pt-BR for Brazilian Portuguese); if this is
+            omitted a code of `en` (English) will be assumed by the remote
+            service.
+
+        :param string bounds: Provides the geocoder with a hint to the region
+            that the query resides in. This value will help the geocoder
+            but will not restrict the possible results to the supplied
+            region. The bounds parameter should be specified as 4
+            coordinate points forming the south-west and north-east
+            corners of a bounding box. For example,
+            `bounds=-0.563160,51.280430,0.278970,51.683979`.
+
+        :param string country: Provides the geocoder with a hint to the
+            country that the query resides in. This value will help the
+            geocoder but will not restrict the possible results to the
+            supplied country. The country code is a 3 character code as
+            defined by the ISO 3166-1 Alpha 3 standard.
+
+        :param bool exactly_one: Return one result or a list of results, if
+            available.
+
+        :param int timeout: Time, in seconds, to wait for the geocoding service
+            to respond before raising a :class:`geopy.exc.GeocoderTimedOut`
+            exception. Set this only if you wish to override, on this call
+            only, the value set during the geocoder's initialization.
+
+        """
+        params = {
+            'key': self.api_key,
+            'q': self.format_string % query,
         }
-        self._initialize(**kwargs)
+        if bounds:
+            params['bounds'] = bounds
+        if language:
+            params['language'] = language
+        if country:
+            params['country'] = country
 
-    def _catch_errors(self):
-        if self.content:
-            status = self.content.get('status')
-            if status:
-                self.status_code = status.get('code')
-                message = status.get('message')
-                if self.status_code:
-                    self.error = message
+        url = "?".join((self.api, urlencode(params)))
 
-    def _exceptions(self):
-        # Build intial Tree with results
-        if self.parse['results']:
-            self._build_tree(self.parse['results'][0])
-        licenses = self.parse['licenses']
-        if licenses:
-            self.parse['licenses'] = licenses[0]
+        logger.debug("%s.geocode: %s", self.__class__.__name__, url)
+        return self._parse_json(
+            self._call_geocoder(url, timeout=timeout), exactly_one
+        )
 
-    @property
-    def lat(self):
-        return self.parse['geometry'].get('lat')
+    def reverse(
+            self,
+            query,
+            language=None,
+            exactly_one=False,
+            timeout=None,
+    ):  # pylint: disable=W0221,R0913
+        """
+        Given a point, find an address.
 
-    @property
-    def lng(self):
-        return self.parse['geometry'].get('lng')
+        :param query: The coordinates for which you wish to obtain the
+            closest human-readable addresses.
+        :type query: :class:`geopy.point.Point`, list or tuple of (latitude,
+            longitude), or string as "%(latitude)s, %(longitude)s"
 
-    @property
-    def address(self):
-        return self.parse.get('formatted')
+        :param string language: The language in which to return results.
 
-    @property
-    def housenumber(self):
-        return self.parse['components'].get('house_number')
+        :param boolean exactly_one: Return one result or a list of results, if
+            available.
 
-    @property
-    def street(self):
-        return self.parse['components'].get('road')
+        :param int timeout: Time, in seconds, to wait for the geocoding service
+            to respond before raising a :class:`geopy.exc.GeocoderTimedOut`
+            exception. Set this only if you wish to override, on this call
+            only, the value set during the geocoder's initialization.
 
-    @property
-    def neighborhood(self):
-        neighbourhood = self.parse['components'].get('neighbourhood')
-        if neighbourhood:
-            return neighbourhood
-        elif self.suburb:
-            return self.suburb
-        elif self.city_district:
-            return self.city_district
+        """
+        params = {
+            'key': self.api_key,
+            'q': self._coerce_point_to_string(query),
+        }
+        if language:
+            params['language'] = language
 
-    @property
-    def suburb(self):
-        return self.parse['components'].get('suburb')
+        url = "?".join((self.api, urlencode(params)))
+        logger.debug("%s.reverse: %s", self.__class__.__name__, url)
+        return self._parse_json(
+            self._call_geocoder(url, timeout=timeout), exactly_one
+        )
 
-    @property
-    def city_district(self):
-        return self.parse['components'].get('city_district')
+    def _parse_json(self, page, exactly_one=True):
+        '''Returns location, (latitude, longitude) from json feed.'''
 
-    @property
-    def city(self):
-        city = self.parse['components'].get('city')
-        if city:
-            return city
-        elif self.town:
-            return self.town
-        elif self.county:
-            return self.county
+        places = page.get('results', [])
+        if not len(places):
+            self._check_status(page.get('status'))
+            return None
 
-    @property
-    def town(self):
-        return self.parse['components'].get('town')
+        def parse_place(place):
+            '''Get the location, lat, lng from a single json place.'''
+            location = place.get('formatted')
+            latitude = place['geometry']['lat']
+            longitude = place['geometry']['lng']
+            return Location(location, (latitude, longitude), place)
 
-    @property
-    def county(self):
-        return self.parse['components'].get('county')
+        if exactly_one:
+            return parse_place(places[0])
+        else:
+            return [parse_place(place) for place in places]
 
-    @property
-    def state(self):
-        return self.parse['components'].get('state')
+    @staticmethod
+    def _check_status(status):
+        """
+        Validates error statuses.
+        """
+        status_code = status['code']
+        if status_code == 429:
+            # Rate limit exceeded
+            raise GeocoderQuotaExceeded(
+                'The given key has gone over the requests limit in the 24'
+                ' hour period or has submitted too many requests in too'
+                ' short a period of time.'
+            )
+        if status_code == 200:
+            # When there are no results, just return.
+            return
 
-    @property
-    def country(self):
-        return self.parse['components'].get('country_code')
-
-    @property
-    def postal(self):
-        return self.parse['components'].get('postcode')
-
-    @property
-    def confidence(self):
-        return self.parse.get('confidence')
-
-    @property
-    def w3w(self):
-        return self.parse['what3words'].get('words')
-
-    @property
-    def mgrs(self):
-        return self.parse['annotations'].get('MGRS')
-
-    @property
-    def geohash(self):
-        return self.parse['annotations'].get('geohash')
-
-    @property
-    def callingcode(self):
-        return self.parse['annotations'].get('callingcode')
-
-    @property
-    def Maidenhead(self):
-        return self.parse['annotations'].get('Maidenhead')
-
-    @property
-    def DMS(self):
-        return self.parse.get('DMS')
-
-    @property
-    def Mercator(self):
-        return self.parse.get('Mercator')
-
-    @property
-    def license(self):
-        return self.parse.get('licenses')
-
-    @property
-    def bbox(self):
-        south = self.parse['southwest'].get('lat')
-        north = self.parse['northeast'].get('lat')
-        west = self.parse['southwest'].get('lng')
-        east = self.parse['northeast'].get('lng')
-        return self._get_bbox(south, west, north, east)
-
-if __name__ == '__main__':
-    g = OpenCage('1552 Payette dr., Ottawa')
-    print(g.json['mgrs'])
+        if status_code == 403:
+            raise GeocoderQueryError(
+                'Your request was denied.'
+            )
+        else:
+            raise GeocoderQueryError('Unknown error.')
