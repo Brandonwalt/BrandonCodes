@@ -1,7 +1,6 @@
 import os
 import glob
 import time
-import datetime
 
 os.system('modprobe w1-gpio')
 os.system('modprobe w1-therm')
@@ -24,17 +23,9 @@ def read_temp ():
     if equals_pos !=-1:
         temp_string = lines[1][equals_pos+2:]
         temp_c = float(temp_string) / 1000.0
-        return temp_c, 
+        temp_f = temp_c * 9.0 / 5.0+ 32.0
+        return temp_c, temp_f
 
 while True:
-    f=open ('tempdata.txt','a')
-    now = datetime.datetime.now()
-    timestamp = now.strftime("%Y/%m/%d 5H:%M:%S")
-    outvalue = read_temp()
-    outstring = str(timestamp)+"  "+str(outvalue)+"  C"
-    print "Writing "+outstring+" to tempdata.txt"
-
-    f.write(outstring+"\n")
-    f.close()
-    
-    time.sleep(3)
+    print(read_temp())
+    time.sleep(1)

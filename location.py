@@ -1,82 +1,125 @@
-"""Review question test 1 TPRG2131 Location class."""
+#!/usr/bin/python
+# coding: utf8
 
-### DEFINE CLASS LOCATION HERE ###
-from math import radians, sin, cos, asin, sqrt, pi
+import re
+import geocoder
+from six import string_types
+
 
 class Location(object):
-    def __init__(self,name,lat,long):
-        self.name = name
-        self.lat = lat
-        self.long = long
-        return
+    """ Location container """
+    lat = None
+    lng = None
 
-    def get_name(self):
-        return self.name
+    def __init__(self, location, **kwargs):
+        self.location = location
+        self.kwargs = kwargs
+        self._check_input(location)
 
-    def get_latitude(self):
+    @property
+    def ok(self):
+        return bool(self.latlng)
+
+    def _convert_float(self, number):
+        try:
+            return float(number)
+        except ValueError:
+            return None
+
+    def _check_input(self, location):
+        # Checking for a LatLng String
+        if isinstance(location, string_types):
+            expression = r"[-]?\d+[.]?[-]?[\d]+"
+            pattern = re.compile(expression)
+            match = pattern.findall(location)
+            if len(match) == 2:
+                lat, lng = match
+                self._check_for_list([lat, lng])
+            else:
+                # Check for string to Geocode using a provider
+                provider = self.kwargs.get('provider', 'osm')
+                g = geocoder.get(location, provider=provider)
+                if g.ok:
+                    self.lat, self.lng = g.lat, g.lng
+
+        # Checking for List of Tuple
+        elif isinstance(location, (list, tuple)):
+            self._check_for_list(location)
+
+        # Checking for Dictionary
+        elif isinstance(location, dict):
+            self._check_for_dict(location)
+
+        # Checking for a Geocoder Class
+        elif hasattr(location, 'latlng'):
+            if location.latlng:
+                self.lat, self.lng = location.latlng
+
+        # Result into Error
+        else:
+            raise ValueError("Unknown location: %s" % location)
+
+    def _check_for_list(self, location):
+        # Standard LatLng list or tuple with 2 number values
+        if len(location) == 2:
+            lat = self._convert_float(location[0])
+            lng = self._convert_float(location[1])
+            condition_1 = isinstance(lat, float)
+            condition_2 = isinstance(lng, float)
+
+            # Check if input are Floats
+            if condition_1 and condition_2:
+                condition_3 = -90 <= lat <= 90
+                condition_4 = -180 <= lng <= 180
+
+                # Check if inputs are within the World Geographical
+                # boundary (90,180,-90,-180)
+                if condition_3 and condition_4:
+                    self.lat = lat
+                    self.lng = lng
+                    return self.lat, self.lng
+                else:
+                    raise ValueError("Coords are not within the world's geographical boundary")
+            else:
+                raise ValueError("Coordinates must be numbers")
+
+    def _check_for_dict(self, location):
+        # Standard LatLng list or tuple with 2 number values
+        if 'lat' in location and 'lng' in location:
+            lat = location['lat']
+            lng = location['lng']
+            self._check_for_list([lat, lng])
+
+        if 'y' in location and 'x' in location:
+            lat = location['y']
+            lng = location['x']
+            self._check_for_list([lat, lng])
+
+    @property
+    def latlng(self):
+        if isinstance(self.lat, float) and isinstance(self.lng, float):
+            return [self.lat, self.lng]
+        return []
+
+    @property
+    def latitude(self):
         return self.lat
 
-    def get_longitude(self):
-        return self.long
+    @property
+    def longitude(self):
+        return self.lng
 
-    def distance_to(self, other):
-        RADIUS = 6367.0  # km
+    @property
+    def xy(self):
+        if isinstance(self.lat, float) and isinstance(self.lng, float):
+            return [self.lng, self.lat]
+        return []
 
-    # Convert degrees to radians for math module trig functions
-        lat1 = radians(self.get_latitude)
-        long1 = radians(self.get_longitude)
-        lat2 = radians(other.get_latitude)
-        long2 = radians(other.get_longitude)
-    
-    # difference in latitude, longitude
-        dlon = long2 - long1
-        dlat = lat2 - lat1
-    # arc subtended by angle between two vectors origined at the centre
-        a = sin(dlat/2.0)**2 + cos( lat1) * cos(lat2) * sin(dlon/2.0)**2
-        c = 2.0 * asin( min( 1.0, sqrt(a)))
-        self.distance_to= RADIUS * c
-        return self.distance_to
+    def __str__(self):
+        if self.ok:
+            return u'{0}, {1}'.format(self.lat, self.lng)
+        return u''
 
-
-### DO NOT EDIT ANYTHING UNDER THIS LINE! ###
-# To run the test, run the file from Idle (F5 Run module)
-# or from the CMD.EXE command line (DOS box) as
-#   > python location.py
-# If all goes well, you should see output that looks like this:
-# ....
-# ----------------------------------------------------------------------
-# Ran 4 tests in 0.001s
-#
-# OK
-#
-# In other words, all tests passed and there were no errors to report.
-###
 if __name__ == '__main__':
-
-    # Import the testing framework (see Python standard library section 26.4)
-    import unittest 
-    # unittest main will use this class to run several tests
-    # with Location objects.
-    class TestLocationMethods(unittest.TestCase):
-        def setUp(self):
-            self.place1 = Location("Toronto", 43.651975, -79.381714)
-            self.place2 = Location("Peterborough", 44.308127, -78.31604)
-
-        def test_get_name(self):
-            self.assertEqual(self.place1.get_name(), "Toronto")
-            self.assertEqual(self.place2.get_name(), "Peterborough")
-
-        def test_get_latitude(self):
-            self.assertEqual(self.place1.get_latitude(), 43.651975)
-            self.assertEqual(self.place2.get_latitude(), 44.308127)
-
-        def test_get_longitude(self):
-            self.assertEqual(self.place1.get_longitude(), -79.381714)
-            self.assertEqual(self.place2.get_longitude(), -78.31604)
-
-        def test_distance_to(self):
-            self.assertEqual(round(self.place1.distance_to(self.place2), 2), 112.15)
-            self.assertEqual(round(self.place2.distance_to(self.place1), 2), 112.15)
-
-    # Run the tests that were just defined.
-    unittest.main()
+    l = Location([0.0, 0.0])
+    print(l.lng)
